@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ABR Video Player Prototype - Phase 2</title>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px;
+            background: #000;
+            color: #fff;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+        }
+        .video-section {
+            flex: 1;
+        }
+        .stats-panel {
+            width: 350px;
+            background: #333;
+            padding: 15px;
+            border-radius: 5px;
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        .network-controls {
+            width: 350px;
+            background: #444;
+            padding: 15px;
+            border-radius: 5px;
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+        }
+        video {
+            width: 100%;
+            max-width: 800px;
+            background: #000;
+        }
+        .stat-item {
+            margin: 10px 0;
+            display: flex;
+            justify-content: space-between;
+        }
+        .stat-label {
+            font-weight: bold;
+        }
+        
+        /* Buffer visualization */
+        .buffer-section {
+            margin: 15px 0;
+            border-top: 1px solid #555;
+            padding-top: 15px;
+        }
+        .buffer-timeline {
+            height: 20px;
+            background: #666;
+            border-radius: 10px;
+            margin: 10px 0;
+            position: relative;
+        }
+        .buffer-metrics {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+        }
+        
+        /* Quality switch history */
+        .switch-history {
+            margin: 15px 0;
+            border-top: 1px solid #555;
+            padding-top: 15px;
+        }
+        .switch-entry {
+            display: flex;
+            justify-content: space-between;
+            padding: 2px 0;
+            font-size: 12px;
+        }
+        .timestamp {
+            color: #aaa;
+        }
+        .quality {
+            color: #4CAF50;
+        }
+        .bitrate {
+            color: #2196F3;
+        }
+        
+        /* ABR transparency panel */
+        .abr-transparency {
+            margin: 15px 0;
+            border-top: 1px solid #555;
+            padding-top: 15px;
+        }
+        .decision-factors {
+            margin: 10px 0;
+        }
+        .factor {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+            font-size: 13px;
+        }
+        .decision-log {
+            margin-top: 15px;
+        }
+        .log-entries {
+            max-height: 150px;
+            overflow-y: auto;
+            font-size: 11px;
+        }
+        .log-entry {
+            padding: 3px 0;
+            border-bottom: 1px solid #555;
+        }
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+        
+        /* Network controls */
+        .control-group {
+            margin: 15px 0;
+        }
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        .control-group input[type="range"] {
+            width: 100%;
+            margin-bottom: 5px;
+        }
+        .preset-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .preset-buttons button {
+            background: #666;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .preset-buttons button:hover {
+            background: #777;
+        }
+        .preset-buttons button.active {
+            background: #4CAF50;
+        }
+        
+        h3, h4 {
+            margin-top: 0;
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="video-section">
+            <h1>ABR Video Player Prototype - Phase 2</h1>
+            <video id="video" controls muted autoplay></video>
+        </div>
+    </div>
+
+    <div class="stats-panel">
+        <h3>Playback Stats</h3>
+        <div class="stat-item">
+            <span class="stat-label">Current Quality:</span>
+            <span id="current-quality">-</span>
+        </div>
+        <div class="stat-item">
+            <span class="stat-label">Buffer Health:</span>
+            <span id="buffer-health">-</span>
+        </div>
+        <div class="stat-item">
+            <span class="stat-label">Bandwidth:</span>
+            <span id="bandwidth">-</span>
+        </div>
+        <div class="stat-item">
+            <span class="stat-label">Dropped Frames:</span>
+            <span id="dropped-frames">-</span>
+        </div>
+        <div class="stat-item">
+            <span class="stat-label">Loading State:</span>
+            <span id="loading-state">-</span>
+        </div>
+
+        <!-- Enhanced Buffer Visualization -->
+        <div class="buffer-section">
+            <h4>Buffer Health</h4>
+            <div class="buffer-timeline" id="buffer-timeline"></div>
+            <div class="buffer-metrics">
+                <span id="buffer-length">Buffer: 0s</span>
+                <span id="buffer-goal">Goal: 30s</span>
+                <span id="buffer-health-indicator">Health: Good</span>
+            </div>
+        </div>
+
+        <!-- Quality Switch History -->
+        <div class="switch-history">
+            <h4>Recent Quality Switches</h4>
+            <div id="switch-history">
+                <div class="switch-entry">
+                    <span class="timestamp">No switches yet</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ABR Decision Transparency -->
+        <div class="abr-transparency">
+            <h4>ABR Decision Engine</h4>
+            <div class="decision-factors">
+                <div class="factor">
+                    <span class="label">Bandwidth Estimate:</span>
+                    <span id="bw-estimate">0 kbps</span>
+                </div>
+                <div class="factor">
+                    <span class="label">Buffer Status:</span>
+                    <span id="buffer-health-status">Good</span>
+                </div>
+                <div class="factor">
+                    <span class="label">Switch Frequency:</span>
+                    <span id="switch-frequency">0/min</span>
+                </div>
+                <div class="factor">
+                    <span class="label">Next Decision:</span>
+                    <span id="next-decision">Maintain quality</span>
+                </div>
+            </div>
+            
+            <div class="decision-log">
+                <h4 style="margin-bottom: 10px;">Decision Log:</h4>
+                <div class="log-entries" id="log-entries">
+                    <div class="log-entry">Waiting for ABR decisions...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Network Simulation Controls -->
+    <div class="network-controls">
+        <h3>Network Simulation</h3>
+        
+        <div class="control-group">
+            <label>Bandwidth Limit:</label>
+            <input type="range" id="bandwidth-slider" min="100" max="10000" value="5000">
+            <span id="bandwidth-value">5000 kbps</span>
+        </div>
+        
+        <div class="control-group">
+            <label>Network Latency:</label>
+            <input type="range" id="latency-slider" min="0" max="500" value="50">
+            <span id="latency-value">50ms</span>
+        </div>
+        
+        <div class="control-group">
+            <label>Packet Loss:</label>
+            <input type="range" id="loss-slider" min="0" max="10" value="0" step="0.1">
+            <span id="loss-value">0%</span>
+        </div>
+        
+        <div class="preset-buttons">
+            <button onclick="applyNetworkPreset('3g')">3G</button>
+            <button onclick="applyNetworkPreset('4g')">4G</button>
+            <button onclick="applyNetworkPreset('wifi')" class="active">WiFi</button>
+            <button onclick="applyNetworkPreset('throttled')">Slow WiFi</button>
+            <button onclick="applyNetworkPreset('perfect')">Perfect</button>
+        </div>
+    </div>
+
+    <script src="player.js"></script>
+</body>
+</html>
