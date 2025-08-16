@@ -12,6 +12,14 @@ const CONFIG = {
   maxLogEntries: 20,              // Maximum decision log entries
   maxDisplaySwitches: 5,          // Number of quality switches to show
   
+  minStutterAdvance: 0.1,         // Min video time advance to not be considered stuttering
+  expectedPlaybackRate: 0.5,       // Expected minimum playback rate (fraction of real-time)
+  stutterRatings: {
+    excellent: 1,                  // < 1% stutter ratio
+    good: 5,                       // < 5% stutter ratio
+    fair: 10                       // < 10% stutter ratio
+    // Anything above 10% is "Poor"
+  }
 };
 
 // DOM elements
@@ -30,6 +38,17 @@ const abrState = {
   decisionLog: []
 };
 
+// Stutter tracking state
+const stutterState = {
+  events: [],
+  count: 0,
+  totalTime: 0,
+  playbackStartTime: 0,
+  playbackTotalTime: 0,
+  isStuttering: false,
+  stutterStartTime: 0,
+  lastPlayPosition: 0
+};
 
 
 // HLS Player Setup
@@ -49,6 +68,7 @@ if (Hls.isSupported()) {
     hls.attachMedia(video);
 
     setupHlsEventListeners();
+    setupStutterDetection();
 } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
     // Fallback for Safari
     video.src = CONFIG.streamUrl;
@@ -152,6 +172,7 @@ function updateStats() {
         updateBufferTimeline();
         updateABRTransparency();
         updateSwitchFrequency();
+        updateStutterMetrics();
     }, 1000);
 }
 
@@ -303,4 +324,164 @@ function updateDecisionLogDisplay() {
     
     // Auto-scroll to top to show latest entry
     logDiv.scrollTop = 0;
+}
+
+// Stutter Detection Functions
+function setupStutterDetection() {
+    // Track when playback starts
+    video.addEventListener('playing', () => {
+        console.log("playing...")
+        if (stutterState.playbackStartTime === 0) {
+            stutterState.playbackStartTime = Date.now();
+        }
+        playerState.lastUpdateTime = Date.now();
+        stutterState.lastPlayPosition = video.currentTime;
+        
+        if (stutterState.isStuttering) {
+            // If we were stuttering, record the stutter end
+            const stutterDuration = (Date.now() - stutterState.stutterStartTime) / 1000;
+            stutterState.totalTime += stutterDuration;
+            stutterState.isStuttering = false;
+            
+            // Add stutter to history
+            stutterState.events.push({
+                startTime: stutterState.stutterStartTime,
+                duration: stutterDuration,
+                position: video.currentTime
+            });
+            
+            addToDecisionLog({
+                timestamp: new Date(),
+                action: 'Playback Resumed',
+                details: `After ${stutterDuration.toFixed(2)}s stutter at position ${video.currentTime.toFixed(1)}s`
+            });
+            
+            updateStutterMetrics();
+        }
+    });
+    
+    // Detect when video is waiting/buffering
+    video.addEventListener('waiting', () => {
+        console.log("buffering...")
+        if (!stutterState.isStuttering) {
+            stutterState.count++;
+            stutterState.isStuttering = true;
+            stutterState.stutterStartTime = Date.now();
+            
+            addToDecisionLog({
+                timestamp: new Date(),
+                action: 'Playback Stutter',
+                details: `Stutter detected at position ${video.currentTime.toFixed(1)}s`
+            });
+        }
+    });
+    
+    // Regular time update - detect if playback is not advancing
+    video.addEventListener('timeupdate', () => {
+        const now = Date.now();
+        
+        // Only check every defined interval
+        if (now - playerState.lastUpdateTime < 250) return;
+        
+        // Update total playback time
+        if (!video.paused && !video.ended) {
+            stutterState.playbackTotalTime += (now - playerState.lastUpdateTime) / 1000;
+        }
+        
+        // Check if video position hasn't advanced but we're not in a detected waiting state
+        if (!video.paused && !video.seeking && !stutterState.isStuttering) {
+            const expectedAdvance = (now - playerState.lastUpdateTime) / 1000 * CONFIG.expectedPlaybackRate;
+            const actualAdvance = video.currentTime - stutterState.lastPlayPosition;
+            
+            if (actualAdvance < expectedAdvance && actualAdvance < CONFIG.minStutterAdvance && now - playerState.lastUpdateTime > 500) {
+                // We detected a stutter that didn't trigger waiting event
+                stutterState.count++;
+                stutterState.isStuttering = true;
+                stutterState.stutterStartTime = now;
+                
+                addToDecisionLog({
+                    timestamp: new Date(),
+                    action: 'Playback Stutter',
+                    details: `Silent stutter detected at position ${video.currentTime.toFixed(1)}s`
+                });
+            }
+        } else if (stutterState.isStuttering && video.currentTime > stutterState.lastPlayPosition + 0.5) {
+            // Video has advanced significantly while in stutter state - must have resumed
+            const stutterDuration = (now - stutterState.stutterStartTime) / 1000;
+            stutterState.totalTime += stutterDuration;
+            stutterState.isStuttering = false;
+            
+            // Add stutter to history
+            stutterState.events.push({
+                startTime: stutterState.stutterStartTime,
+                duration: stutterDuration,
+                position: video.currentTime
+            });
+            
+            addToDecisionLog({
+                timestamp: new Date(),
+                action: 'Playback Resumed',
+                details: `After ${stutterDuration.toFixed(2)}s silent stutter`
+            });
+            
+            updateStutterMetrics();
+        }
+        
+        playerState.lastUpdateTime = now;
+        stutterState.lastPlayPosition = video.currentTime;
+    });
+}
+
+function updateStutterMetrics() {
+    // Update basic count and total time
+    document.getElementById('stutter-count').textContent = stutterState.count;
+    document.getElementById('stutter-total-time').textContent = `${stutterState.totalTime.toFixed(1)}s`;
+        
+    // Update stutter history visualization
+    updateStutterVisualization();
+}
+
+function updateStutterVisualization() {
+    const historyEl = document.getElementById('stutter-history');
+    const now = Date.now();
+    const windowSize = 60 * 1000;
+    const startTime = now - windowSize;
+    
+    // Filter to recent stutters only
+    const recentStutters = stutterState.events.filter(s => s.startTime >= startTime);
+    
+    if (recentStutters.length === 0) {
+        historyEl.style.background = '#555';
+        return;
+    }
+    
+    // Create visualization of stutters
+    let background = 'linear-gradient(to right, ';
+    let lastPos = 0;
+    
+    recentStutters.forEach((stutter, index) => {
+        const startPos = ((stutter.startTime - startTime) / windowSize) * 100;
+        const endPos = Math.min(100, startPos + ((stutter.duration * 1000) / windowSize) * 100);
+        
+        // Add green section before stutter
+        if (startPos > lastPos) {
+            background += `#555 ${lastPos}%, #555 ${startPos}%, `;
+        }
+        
+        // Add red section for stutter
+        background += `#F44336 ${startPos}%, #F44336 ${endPos}%, `;
+        
+        lastPos = endPos;
+    });
+    
+    // Add final section
+    if (lastPos < 100) {
+        background += `#555 ${lastPos}%, #555 100%`;
+    } else {
+        // Remove trailing comma and space
+        background = background.slice(0, -2);
+    }
+    
+    background += ')';
+    historyEl.style.background = background;
 }
