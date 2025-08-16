@@ -30,15 +30,6 @@
             max-height: 80vh;
             overflow-y: auto;
         }
-        .network-controls {
-            width: 350px;
-            background: #444;
-            padding: 15px;
-            border-radius: 5px;
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-        }
         video {
             width: 100%;
             max-width: 800px;
@@ -125,44 +116,11 @@
             border-bottom: none;
         }
         
-        /* Network controls */
-        .control-group {
-            margin: 15px 0;
-        }
-        .control-group label {
-            display: block;
-            margin-bottom: 5px;
-            font-weight: bold;
-        }
-        .control-group input[type="range"] {
-            width: 100%;
-            margin-bottom: 5px;
-        }
-        .preset-buttons {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-        .preset-buttons button {
-            background: #666;
-            color: white;
-            border: none;
-            padding: 8px 12px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-        }
-        .preset-buttons button:hover {
-            background: #777;
-        }
-        .preset-buttons button.active {
-            background: #4CAF50;
-        }
-        
         h3, h4 {
             margin-top: 0;
             color: #fff;
         }
+        
     </style>
 </head>
 <body>
@@ -202,7 +160,7 @@
             <div class="buffer-timeline" id="buffer-timeline"></div>
             <div class="buffer-metrics">
                 <span id="buffer-length">Buffer: 0s</span>
-                <span id="buffer-goal">Goal: 30s</span>
+                <span id="buffer-goal">Goal: 20s</span>
                 <span id="buffer-health-indicator">Health: Good</span>
             </div>
         </div>
@@ -248,36 +206,6 @@
         </div>
     </div>
 
-    <!-- Network Simulation Controls -->
-    <div class="network-controls">
-        <h3>Network Simulation</h3>
-        
-        <div class="control-group">
-            <label>Bandwidth Limit:</label>
-            <input type="range" id="bandwidth-slider" min="100" max="10000" value="5000">
-            <span id="bandwidth-value">5000 kbps</span>
-        </div>
-        
-        <div class="control-group">
-            <label>Network Latency:</label>
-            <input type="range" id="latency-slider" min="0" max="500" value="50">
-            <span id="latency-value">50ms</span>
-        </div>
-        
-        <div class="control-group">
-            <label>Packet Loss:</label>
-            <input type="range" id="loss-slider" min="0" max="10" value="0" step="0.1">
-            <span id="loss-value">0%</span>
-        </div>
-        
-        <div class="preset-buttons">
-            <button onclick="applyNetworkPreset('3g')">3G</button>
-            <button onclick="applyNetworkPreset('4g')">4G</button>
-            <button onclick="applyNetworkPreset('wifi')" class="active">WiFi</button>
-            <button onclick="applyNetworkPreset('throttled')">Slow WiFi</button>
-            <button onclick="applyNetworkPreset('perfect')">Perfect</button>
-        </div>
-    </div>
 
     <script src="player.js"></script>
 </body>

@@ -1,192 +1,61 @@
-const video = document.getElementById('video');
-const streamUrl = 'http://localhost:3000/content/playlists/master_long.m3u8';
+// Configuration constants
+const CONFIG = {
+  streamUrl: 'http://localhost:3000/content/playlists/master_15s_segments.m3u8',
+  bufferGoal: 20,                 // Target buffer length in seconds
+  lowBufferThreshold: 5,          // Buffer level to trigger emergency downgrade
+  fairBufferThreshold: 10,        // Buffer level for "Fair" rating
+  goodBufferThreshold: 20,        // Buffer level for "Good" rating
 
-let hls;
-const qualitySwitchHistory = [];
-const decisionLog = [];
+  bufferStartOffset: 5,           // Show 5 seconds behind current position
+  bufferTimelineWindow: 60,       // Buffer timeline display window in seconds
 
-// Network Simulator Class
-class NetworkSimulator {
-    constructor() {
-        this.bandwidthLimit = 5000; // kbps
-        this.latency = 50; // ms
-        this.packetLoss = 0; // percentage
-        this.originalFetch = window.fetch;
-        this.setupNetworkControls();
-        this.injectFetchOverride();
-    }
-    
-    setupNetworkControls() {
-        // Bandwidth slider
-        document.getElementById('bandwidth-slider').addEventListener('input', (e) => {
-            this.setBandwidth(parseInt(e.target.value));
-        });
-        
-        // Latency slider
-        document.getElementById('latency-slider').addEventListener('input', (e) => {
-            this.setLatency(parseInt(e.target.value));
-        });
-        
-        // Loss slider
-        document.getElementById('loss-slider').addEventListener('input', (e) => {
-            this.setPacketLoss(parseFloat(e.target.value));
-        });
-    }
-    
-    setBandwidth(kbps) {
-        this.bandwidthLimit = kbps;
-        document.getElementById('bandwidth-value').textContent = `${kbps} kbps`;
-        
-        // Force hls.js to re-evaluate bandwidth
-        if (window.hls && window.hls.bandwidthEstimate) {
-            // Gradually adjust the estimate rather than sudden change
-            window.hls.bandwidthEstimate = Math.min(window.hls.bandwidthEstimate, kbps * 1000);
-        }
-    }
-    
-    setLatency(ms) {
-        this.latency = ms;
-        document.getElementById('latency-value').textContent = `${ms}ms`;
-    }
-    
-    setPacketLoss(percentage) {
-        this.packetLoss = percentage;
-        document.getElementById('loss-value').textContent = `${percentage}%`;
-    }
-    
-    injectFetchOverride() {
-        const simulator = this;
-        window.fetch = function(url, options) {
-            return simulator.simulateRequest(url, options);
-        };
-    }
-    
-    async simulateRequest(url, options) {
-        // Add artificial latency
-        if (this.latency > 0) {
-            await new Promise(resolve => setTimeout(resolve, this.latency));
-        }
-        
-        // Simulate packet loss
-        if (Math.random() < this.packetLoss / 100) {
-            throw new Error('Simulated network failure');
-        }
-        
-        try {
-            const response = await this.originalFetch(url, options);
-            
-            // Only throttle video segment requests, not playlist requests
-            if (url.includes('.ts') || url.includes('.m4s')) {
-                return this.throttleResponse(response);
-            }
-            
-            return response;
-        } catch (error) {
-            console.log('Network request failed:', error.message);
-            throw error;
-        }
-    }
-    
-    throttleResponse(response) {
-        if (!response.body || this.bandwidthLimit >= 10000) {
-            return response; // No throttling needed for very high bandwidth
-        }
-        
-        const reader = response.body.getReader();
-        const bytesPerSecond = (this.bandwidthLimit * 1000) / 8; // Convert kbps to bytes/sec
-        
-        return new Response(
-            new ReadableStream({
-                start(controller) {
-                    let startTime = Date.now();
-                    let totalBytesRead = 0;
-                    
-                    function pump() {
-                        return reader.read().then(({ done, value }) => {
-                            if (done) {
-                                controller.close();
-                                return;
-                            }
-                            
-                            totalBytesRead += value.length;
-                            const elapsed = (Date.now() - startTime) / 1000;
-                            const expectedBytes = bytesPerSecond * elapsed;
-                            
-                            if (totalBytesRead > expectedBytes && elapsed > 0) {
-                                const delay = ((totalBytesRead - expectedBytes) / bytesPerSecond) * 1000;
-                                setTimeout(() => {
-                                    controller.enqueue(value);
-                                    pump();
-                                }, Math.max(0, delay));
-                            } else {
-                                controller.enqueue(value);
-                                pump();
-                            }
-                        });
-                    }
-                    
-                    pump();
-                }
-            }),
-            {
-                headers: response.headers,
-                status: response.status,
-                statusText: response.statusText
-            }
-        );
-    }
-}
-
-// Network presets
-const networkPresets = {
-    '3g': { bandwidth: 1000, latency: 200, loss: 1 },
-    '4g': { bandwidth: 5000, latency: 100, loss: 0.5 },
-    'wifi': { bandwidth: 25000, latency: 20, loss: 0.1 },
-    'throttled': { bandwidth: 500, latency: 150, loss: 2 },
-    'perfect': { bandwidth: 50000, latency: 5, loss: 0 }
+  maxLogEntries: 20,              // Maximum decision log entries
+  maxDisplaySwitches: 5,          // Number of quality switches to show
+  
 };
 
-function applyNetworkPreset(preset) {
-    const config = networkPresets[preset];
-    
-    // Update the simulator
-    networkSim.setBandwidth(config.bandwidth);
-    networkSim.setLatency(config.latency);
-    networkSim.setPacketLoss(config.loss);
-    
-    // Update UI sliders
-    document.getElementById('bandwidth-slider').value = config.bandwidth;
-    document.getElementById('latency-slider').value = config.latency;
-    document.getElementById('loss-slider').value = config.loss;
-    
-    // Update active button
-    document.querySelectorAll('.preset-buttons button').forEach(btn => btn.classList.remove('active'));
-    event.target.classList.add('active');
-    
-    addToDecisionLog({
-        timestamp: new Date(),
-        action: 'Network Preset Applied',
-        details: `${preset.toUpperCase()}: ${config.bandwidth}kbps, ${config.latency}ms, ${config.loss}% loss`
-    });
-}
+// DOM elements
+const video = document.getElementById('video');
 
-// Initialize network simulator
-const networkSim = new NetworkSimulator();
+// Core player state
+let hls;
+
+const playerState = {
+  lastUpdateTime: Date.now()
+};
+
+// ABR state
+const abrState = {
+  qualitySwitchHistory: [],
+  decisionLog: []
+};
+
+
 
 // HLS Player Setup
 if (Hls.isSupported()) {
     hls = new Hls({
-        debug: false, // Set to false to reduce console noise
+        debug: false,                    // Set to false to reduce console noise
         enableWorker: true,
         lowLatencyMode: false,
+        maxBufferLength: CONFIG.bufferGoal,
+        maxMaxBufferLength: CONFIG.bufferGoal,
+        startLevel: 0,                  // Start with lowest quality
     });
 
     window.hls = hls; // Make globally accessible
 
-    hls.loadSource(streamUrl);
+    hls.loadSource(CONFIG.streamUrl);
     hls.attachMedia(video);
 
-    // Event listeners for learning ABR behavior
+    setupHlsEventListeners();
+} else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    // Fallback for Safari
+    video.src = CONFIG.streamUrl;
+}
+
+// HLS Event Listeners Setup
+function setupHlsEventListeners() {
     hls.on(Hls.Events.MANIFEST_PARSED, function (event, data) {
         console.log('Manifest parsed, found ' + data.levels.length + ' quality levels');
         updateStats();
@@ -214,7 +83,7 @@ if (Hls.isSupported()) {
             reason: determineSwitchReason(data, bufferLength, bandwidth)
         };
         
-        qualitySwitchHistory.push(switchInfo);
+        abrState.qualitySwitchHistory.push(switchInfo);
         updateQualitySwitchDisplay();
         
         addToDecisionLog({
@@ -247,10 +116,6 @@ if (Hls.isSupported()) {
             details: `${data.type}: ${data.details}`
         });
     });
-
-} else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-    // Fallback for Safari
-    video.src = streamUrl;
 }
 
 function determineSwitchReason(data, bufferHealth, bandwidth) {
@@ -260,18 +125,24 @@ function determineSwitchReason(data, bufferHealth, bandwidth) {
     const currentBitrate = hls.currentLevel >= 0 && hls.levels[hls.currentLevel] ? 
         hls.levels[hls.currentLevel].bitrate / 1000 : 0;
     
-    if (bufferHealth < 5) return 'Low buffer - emergency downgrade';
-    if (bufferHealth > 20 && bandwidth > targetBitrate * 1.5 && data.level > hls.currentLevel) 
+    if (bufferHealth < CONFIG.lowBufferThreshold) 
+        return 'Low buffer - emergency downgrade';
+    
+    if (bufferHealth > CONFIG.bufferGoal && 
+        bandwidth > targetBitrate * 1.5 && 
+        data.level > hls.currentLevel) 
         return 'Sufficient buffer + bandwidth - upgrade';
+    
     if (bandwidth < currentBitrate * 0.8 && data.level < hls.currentLevel) 
         return 'Insufficient bandwidth - downgrade';
+    
     return 'Routine optimization';
 }
 
 function updateStats() {
     if (!hls) return;
     
-    // Update stats every second
+    // Update stats using the configured interval
     setInterval(() => {
         updateCurrentQuality();
         updateBufferHealth();
@@ -301,11 +172,11 @@ function updateBufferHealth() {
         document.getElementById('buffer-health').textContent = `${bufferHealth.toFixed(1)}s`;
         document.getElementById('buffer-length').textContent = `Buffer: ${bufferHealth.toFixed(1)}s`;
         
-        // Update buffer health indicator
+        // Update buffer health indicator using configured thresholds
         let healthStatus = 'Good';
-        if (bufferHealth < 5) healthStatus = 'Critical';
-        else if (bufferHealth < 10) healthStatus = 'Low';
-        else if (bufferHealth < 20) healthStatus = 'Fair';
+        if (bufferHealth < CONFIG.lowBufferThreshold) healthStatus = 'Critical';
+        else if (bufferHealth < CONFIG.fairBufferThreshold) healthStatus = 'Low';
+        else if (bufferHealth < CONFIG.goodBufferThreshold) healthStatus = 'Fair';
         
         document.getElementById('buffer-health-indicator').textContent = `Health: ${healthStatus}`;
         document.getElementById('buffer-health-status').textContent = healthStatus;
@@ -319,9 +190,9 @@ function updateBufferTimeline() {
     const duration = video.duration || 100; // Fallback for live streams
     
     if (buffered.length > 0 && duration > 0) {
-        const bufferStart = Math.max(0, currentTime - 5); // Show 5 seconds behind
+        const bufferStart = Math.max(0, currentTime - CONFIG.bufferStartOffset); 
         const bufferEnd = buffered.end(buffered.length - 1);
-        const windowSize = 60; // Show 60 second window
+        const windowSize = CONFIG.bufferTimelineWindow; 
         
         const currentPos = ((currentTime - bufferStart) / windowSize) * 100;
         const bufferedPos = ((bufferEnd - bufferStart) / windowSize) * 100;
@@ -365,7 +236,7 @@ function updateLoadingState() {
 
 function updateQualitySwitchDisplay() {
     const historyDiv = document.getElementById('switch-history');
-    const recent = qualitySwitchHistory.slice(-5); // Show last 5 switches
+    const recent = abrState.qualitySwitchHistory.slice(-CONFIG.maxDisplaySwitches);
     
     if (recent.length === 0) {
         historyDiv.innerHTML = '<div class="switch-entry"><span class="timestamp">No switches yet</span></div>';
@@ -400,16 +271,16 @@ function updateABRTransparency() {
 function updateSwitchFrequency() {
     const now = Date.now();
     const oneMinuteAgo = now - 60000;
-    const recentSwitches = qualitySwitchHistory.filter(s => s.timestamp > oneMinuteAgo);
+    const recentSwitches = abrState.qualitySwitchHistory.filter(s => s.timestamp > oneMinuteAgo);
     document.getElementById('switch-frequency').textContent = `${recentSwitches.length}/min`;
 }
 
 function addToDecisionLog(entry) {
-    decisionLog.push(entry);
+    abrState.decisionLog.push(entry);
     
-    // Keep only last 20 entries
-    if (decisionLog.length > 20) {
-        decisionLog.shift();
+    // Keep only last entries according to config
+    if (abrState.decisionLog.length > CONFIG.maxLogEntries) {
+        abrState.decisionLog.shift();
     }
     
     updateDecisionLogDisplay();
@@ -418,12 +289,12 @@ function addToDecisionLog(entry) {
 function updateDecisionLogDisplay() {
     const logDiv = document.getElementById('log-entries');
     
-    if (decisionLog.length === 0) {
+    if (abrState.decisionLog.length === 0) {
         logDiv.innerHTML = '<div class="log-entry">Waiting for ABR decisions...</div>';
         return;
     }
     
-    logDiv.innerHTML = decisionLog.slice(-10).reverse().map(entry => `
+    logDiv.innerHTML = abrState.decisionLog.slice(-10).reverse().map(entry => `
         <div class="log-entry">
             <strong>${entry.timestamp.toLocaleTimeString()}</strong> - ${entry.action}<br>
             <span style="color: #aaa;">${entry.details || ''}</span>

@@ -16,5 +16,5 @@ app.use('/', express.static(path.join(__dirname, '../player')));
 
 app.listen(PORT, () => {
     console.log(`Server running at http://localhost:${PORT}`);
-    console.log(`HLS stream available at: http://localhost:${PORT}/content/playlists/master.m3u8`);
+    console.log(`HLS stream available at: http://localhost:${PORT}/content/playlists/master_15s_segments.m3u8`);
 });
